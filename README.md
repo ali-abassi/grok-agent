@@ -197,6 +197,39 @@ Conditions that trigger this skill.
 
 ---
 
+## Context Compaction
+
+Grok has a 2M token context window, but long conversations can still get expensive. The verbose mode includes automatic context compaction.
+
+### How It Works
+
+1. **Auto-trigger** - When context usage hits 75% (configurable), compaction runs automatically
+2. **Split** - Messages are split: oldest 50% get compacted, newest 50% kept in full
+3. **Preserve** - System prompt always preserved, recent context stays intact
+4. **Resume** - A placeholder marks where compaction happened, conversation continues seamlessly
+
+```
+Before: [system] [msg1] [msg2] [msg3] [msg4] [msg5] [msg6] [msg7] [msg8]
+After:  [system] [compacted] [msg5] [msg6] [msg7] [msg8]
+```
+
+### Manual Compaction
+
+In verbose mode, force compaction anytime:
+```
+> /compact
+Compacting (45% context used)...
+Compacted: 24 -> 14 messages
+```
+
+### Configuration
+
+```bash
+COMPACT_THRESHOLD=75   # Auto-compact at 75% context usage
+```
+
+---
+
 ## Configuration
 
 ### Environment
