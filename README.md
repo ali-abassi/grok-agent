@@ -1,74 +1,71 @@
 # Grok Agent
 
-A minimal agentic harness for xAI's Grok models. Designed to be bare bones so you can learn how agent loops work and build upon it.
+A minimal agentic harness for xAI's Grok models. Two display modes, same engine.
 
 ## Why Grok?
 
-- **2 million token context window** - Significantly larger than Claude, GPT-4, or other models
-- **Incredibly fast** - grok-4-1-fast lives up to its name
+- **2M token context** - Largest context window available (vs 200k for Claude/GPT)
+- **Fast** - grok-4-1-fast lives up to its name
 - **Smart** - Excellent reasoning and tool use
-- **Cheap** - $2/M input, $10/M output tokens
+- **Cheap** - $2/M input, $10/M output
 
 ## What Makes This Unique
 
-This harness demonstrates core agentic patterns:
+- **JSON-controlled loop** - Model outputs JSON that decides whether to continue or stop
+- **Same engine, two views** - `grok` (minimal) and `grok-detailed` (verbose) share identical logic
+- **Skills system** - Loadable knowledge files the agent uses silently
+- **Bare bones** - Easy to understand, easy to extend
 
-1. **JSON Structured Output** - The model outputs valid JSON that controls whether the loop continues or stops
-2. **Self-Critique** - The detailed mode includes self-review with grading and improvement suggestions
-3. **Exit Conditions** - Define completion criteria upfront, track progress toward them
-4. **Skills System** - Loadable knowledge modules the agent uses silently when relevant
-5. **Bare Bones Design** - Intentionally minimal so you can understand and extend it
+---
 
-## Quick Start
+## Installation
 
 ```bash
-# 1. Set up your API key
-cp .env.example ~/.claude/.env
-# Edit ~/.claude/.env and add your key from https://console.x.ai
+# 1. Clone the repo
+git clone https://github.com/ali-abassi/grok-agent.git
+cd grok-agent
 
-# 2. Copy scripts to PATH
+# 2. Set up your API key
+mkdir -p ~/.grok
+cp .env.example ~/.grok/.env
+# Edit ~/.grok/.env and add your key from https://console.x.ai
+
+# 3. Install scripts
 cp grok grok-detailed ~/.local/bin/
 chmod +x ~/.local/bin/grok ~/.local/bin/grok-detailed
 
-# 3. Create skills directory
+# 4. (Optional) Install default skill
 mkdir -p ~/.local/bin/skills
 cp skills/skill-creation.md ~/.local/bin/skills/
 
-# 4. Run
-grok           # minimal mode
-grok-detailed  # verbose mode
+# 5. Run
+grok           # minimal output
+grok-detailed  # verbose output
 ```
 
-## Modes
+---
+
+## Usage
 
 ### `grok` - Minimal Mode
 
-Clean back-and-forth conversation. Shows only:
-- Your input
-- Tool calls (one line each)
-- Agent response (in blue)
+Clean conversation. Shows: your input, tool calls (one line), response.
 
 ```
-> what's the weather in sf
+> what's the weather in SF?
+thinking...
 [web_search] weather san francisco today
 
-It's 62°F and partly cloudy in San Francisco.
+It's 58°F and foggy in San Francisco.
 
 >
 ```
 
-### `grok-detailed` - Detailed Mode
+### `grok-detailed` - Verbose Mode
 
-Full visibility into agent reasoning. Shows:
-- Session ID, cost tracking, context usage
-- Task description per iteration
-- Goal and exit conditions
-- Progress tracking (completed/current/remaining)
-- Thinking/reasoning process
-- Confidence scores
-- Self-review grades
+Full visibility: session stats, task progress, thinking, confidence scores.
 
-Use this mode when debugging, learning, or understanding agent behavior.
+Use when debugging or learning how the agent works.
 
 ---
 
@@ -76,211 +73,127 @@ Use this mode when debugging, learning, or understanding agent behavior.
 
 ### The JSON Contract
 
-The agent always responds with structured JSON. This creates a predictable contract between the model and the harness.
+The agent always outputs JSON. The `done` field controls the loop:
 
-**Minimal mode:**
 ```json
 {
-  "tool_calls": [{"tool": "bash", "args": {"command": "ls"}}],
-  "response": null,
-  "done": false
-}
-```
-
-**Detailed mode (extended):**
-```json
-{
-  "thinking": "Need to search for current info",
-  "task": "Search weather data",
-  "goal": "Get SF weather",
-  "exit_conditions": ["Weather data retrieved", "Answer provided"],
-  "progress": {
-    "completed": [],
-    "current": "Weather data retrieved",
-    "remaining": ["Answer provided"]
-  },
+  "thinking": "Need to search for current weather",
   "tool_calls": [{"tool": "web_search", "args": {"query": "SF weather"}}],
   "response": null,
-  "confidence": 0,
   "done": false
 }
 ```
+
+- `done: false` → execute tools, loop back
+- `done: true` → show response, wait for input
 
 ### The Loop
 
 ```
-USER INPUT
-    │
-    ▼
-┌─────────────────────────┐
-│  Send to Grok API       │
-│  (with JSON mode)       │
-└───────────┬─────────────┘
-            │
-            ▼
-┌─────────────────────────┐
-│  Parse JSON response    │
-└───────────┬─────────────┘
-            │
-    ┌───────┴───────┐
-    │               │
-    ▼               ▼
-tool_calls?     response?
-    │               │
-    ▼               ▼
-┌──────────┐  ┌──────────────┐
-│ Execute  │  │ Display      │
-│ tools    │  │ response     │
-│          │  │ done=true    │
-└────┬─────┘  └──────────────┘
-     │
-     ▼
- Append results
- to messages
-     │
-     └──────► LOOP BACK
+User Input
+    ↓
+Send to Grok API (JSON mode)
+    ↓
+Parse JSON Response
+    ↓
+┌─────────────────┬──────────────────┐
+│ tool_calls?     │ response?        │
+│      ↓          │      ↓           │
+│ Execute tools   │ Display response │
+│ Add results     │ done=true        │
+│ Loop back ←─────┘                  │
+└────────────────────────────────────┘
 ```
-
-**Key insight:** The `done` field controls the loop. When `done=false`, keep iterating. When `done=true`, show the response and wait for next user input.
-
----
-
-## Skills System
-
-Skills are markdown files that provide domain-specific knowledge. The agent loads them silently when relevant - it never asks the user about skills.
-
-### Setting Up Skills
-
-```bash
-# Create skills directory (same location as the scripts)
-mkdir -p ~/.local/bin/skills
-
-# Skills are markdown files
-~/.local/bin/skills/
-├── skill-creation.md    # Default: how to create new skills
-├── research.md          # Your custom skills
-├── coding.md
-└── writing.md
-```
-
-### Skill File Format
-
-```markdown
-# Skill Name
-
-Brief description of what this skill does.
-
-## When to Use
-
-Conditions that trigger this skill (e.g., "when user asks for research")
-
-## Instructions
-
-Step-by-step guide for the agent:
-1. First do this
-2. Then do that
-3. Finally return this
-
-## Examples
-
-Input: "research topic X"
-Output: [what the agent should produce]
-
-## Tools to Use
-
-- web_search for finding info
-- write_file for saving results
-```
-
-### Default Skill: skill-creation
-
-The harness includes a `skill-creation.md` skill. Just ask:
-
-```
-> create a skill for writing tweets
-```
-
-The agent will create `~/.local/bin/skills/tweets.md` with the proper format.
-
-### How Skills Work
-
-1. On each message, available skills are injected (names only)
-2. If relevant, agent uses `read_file` to load the full skill
-3. Agent follows the skill's instructions silently
-4. User never sees skill mechanics - just better results
 
 ---
 
 ## Tools
 
-### Built-in Tools
-
 | Tool | Args | Description |
 |------|------|-------------|
-| `bash` | `{"command": "..."}` | Run shell commands |
-| `web_search` | `{"query": "..."}` | Search the web via Grok |
+| `bash` | `{"command": "..."}` | Run shell commands (3min timeout) |
+| `web_search` | `{"query": "..."}` | Search the web |
 | `read_file` | `{"path": "..."}` | Read file contents |
 | `write_file` | `{"path": "...", "content": "..."}` | Write/create files |
-| `list_files` | `{"path": "..."}` | List directory contents |
+| `list_files` | `{"path": "..."}` | List directory |
 | `ask_user` | `{"question": "...", "options": [...]}` | Ask user for input |
 
-### Creating a New Tool
+### Adding a Tool
 
-Adding a tool requires 3 changes:
-
-#### 1. Add the Tool Function
-
+1. **Add function:**
 ```bash
-tool_my_tool() {
-    local arg1="$1"
-    local arg2="$2"
-
-    # Your logic here
-    echo "Result to return to agent"
-}
-```
-
-#### 2. Add to the Execute Switch
-
-```bash
-case "$tn" in
-    bash) tr=$(tool_bash "$(echo "$ta"|jq -r '.command')") ;;
-    # ... existing tools ...
-    my_tool) tr=$(tool_my_tool "$(echo "$ta"|jq -r '.arg1')" "$(echo "$ta"|jq -r '.arg2')") ;;
-    *) tr="Unknown tool" ;;
-esac
-```
-
-#### 3. Add to System Prompt
-
-```
-TOOLS:
-- bash: {"command": "..."}
-- my_tool: {"arg1": "...", "arg2": "..."}
-```
-
-#### Example: Calculator Tool
-
-```bash
-# 1. Function
 tool_calc() {
     echo "$1" | bc -l 2>/dev/null || echo "Error"
 }
+```
 
-# 2. In switch
+2. **Add to switch:**
+```bash
 calc) tr=$(tool_calc "$(echo "$ta"|jq -r '.expression')") ;;
+```
 
-# 3. In prompt
+3. **Add to system prompt:**
+```
 - calc: {"expression": "..."} - Evaluate math
 ```
 
-### Tool Guidelines
+---
 
-- Return strings (output goes into messages)
-- Truncate large outputs with `| head -N`
-- Handle errors gracefully
-- Keep tools stateless
-- Add timeouts for slow operations
+## Skills
+
+Skills are markdown files that provide domain knowledge. The agent loads them silently when relevant.
+
+### Setup
+
+```bash
+mkdir -p ~/.local/bin/skills
+```
+
+### Creating a Skill
+
+Just ask:
+```
+> create a skill for writing tweets
+```
+
+Or manually create `~/.local/bin/skills/my-skill.md`:
+
+```markdown
+# My Skill
+
+Brief description.
+
+## When to Use
+Conditions that trigger this skill.
+
+## Instructions
+1. Step one
+2. Step two
+
+## Tools to Use
+- web_search for research
+- write_file for output
+```
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/clear` | Reset conversation |
+| `/exit` | Quit (also `/q`) |
+| `/help` | Show commands |
+
+**Detailed mode only:**
+
+| Command | Description |
+|---------|-------------|
+| `/cd DIR` | Change directory |
+| `/sessions` | List saved sessions |
+| `/resume ID` | Resume session |
+| `/compact` | Force context compaction |
+| `/cost N` | Set cost limit |
 
 ---
 
@@ -288,52 +201,37 @@ calc) tr=$(tool_calc "$(echo "$ta"|jq -r '.expression')") ;;
 
 ### Environment
 
+The scripts check these locations for `.env` (in order):
+1. `./.env` (current directory)
+2. `~/.env`
+3. `~/.grok/.env` (recommended)
+
 ```bash
-# Required
-GROK_API_KEY=xai-...
+# ~/.grok/.env
+GROK_API_KEY=xai-your-key-here
 ```
 
 ### Script Settings
 
-Edit the scripts to customize:
+Edit the scripts to change:
 
 ```bash
-MODEL="grok-4-1-fast"      # or grok-3-fast
-COST_LIMIT=10.00           # Max spend (detailed mode)
-COMPACT_THRESHOLD=75       # Auto-compact at N% context
+MODEL="grok-4-1-fast"      # or grok-3-fast for speed
+COST_LIMIT=10.00           # max spend per session
+COMPACT_THRESHOLD=75       # auto-compact at N% context
 ```
-
-### Commands
-
-**Both modes:**
-| Command | Description |
-|---------|-------------|
-| `/clear` | Reset conversation |
-| `/exit` | Quit (also `/q`, `/quit`) |
-| `/help` | Show available commands |
-
-**Detailed mode only:**
-| Command | Description |
-|---------|-------------|
-| `/cd DIR` | Change working directory |
-| `/sessions` | List saved sessions |
-| `/resume ID` | Resume a saved session |
-| `/compact` | Force context compaction |
-| `/cost N` | Set cost limit (e.g., `/cost 20`) |
-| `/tools` | List available tools |
 
 ---
 
-## Extending the Harness
+## Extending
 
-This is intentionally minimal. Ideas for extending:
+Ideas for building on this:
 
-- **Add memory** - Persist facts across sessions
-- **Add RAG** - Vector search over documents
-- **Add more tools** - APIs, databases, services
-- **Add planning** - Multi-step task decomposition
-- **Add evaluation** - Track success rates
-- **Add streaming** - Show responses as they generate
+- Add memory (persist across sessions)
+- Add RAG (vector search)
+- Add more tools (APIs, databases)
+- Add planning (multi-step decomposition)
+- Add streaming (show tokens as they generate)
 
 ---
 

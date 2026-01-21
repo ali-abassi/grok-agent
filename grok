@@ -1,40 +1,51 @@
 #!/bin/bash
-# GROK - Minimal agentic chat
-# For detailed view: grok-detailed
+# ============================================================================
+# GROK CHAT - Minimal view (same engine as grok-detailed)
+# ============================================================================
 
-source ~/.claude/.env 2>/dev/null
-XAI_API_KEY="${GROK_API_KEY:-}"
-[ -z "$XAI_API_KEY" ] && echo "Error: GROK_API_KEY not found" && exit 1
+# Load API key from .env file (check multiple locations)
+[ -f ".env" ] && source .env
+[ -f "$HOME/.env" ] && source "$HOME/.env"
+[ -f "$HOME/.grok/.env" ] && source "$HOME/.grok/.env"
+XAI_API_KEY="${GROK_API_KEY:-$XAI_API_KEY}"
+
+if [ -z "$XAI_API_KEY" ]; then
+    echo "Error: GROK_API_KEY not found"
+    echo "Create a .env file with: GROK_API_KEY=your-key-here"
+    exit 1
+fi
 
 MODEL="grok-4-1-fast"
 API_URL="https://api.x.ai/v1/chat/completions"
 WORKING_DIR="$(pwd)"
 
-# Skills directory
 SCRIPT_LOCATION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_DIR="${SCRIPT_LOCATION}/skills"
 
-SYSTEM_PROMPT='You are Grok, a helpful AI assistant. Be direct and concise.
+# Same system prompt as grok-detailed for consistent behavior
+SYSTEM_PROMPT='You are Grok, an AI assistant. Direct. Helpful. Gets things done.
 
-OUTPUT FORMAT - Respond with valid JSON only:
+OUTPUT FORMAT - Always respond with valid JSON:
 {
+  "thinking": "Brief reasoning (1-2 sentences)",
   "tool_calls": [{"tool": "tool_name", "args": {"param": "value"}}],
-  "response": "Your answer (null if calling tools)",
+  "response": "Your answer to user (null if calling tools)",
   "done": true or false
 }
 
 TOOLS:
-- bash: {"command": "..."}
-- web_search: {"query": "..."}
-- read_file: {"path": "..."}
-- write_file: {"path": "...", "content": "..."}
-- list_files: {"path": "..."}
-- ask_user: {"question": "...", "options": [...]}
+- bash: {"command": "..."} - Run shell commands (3min timeout)
+- web_search: {"query": "..."} - Search the web
+- read_file: {"path": "..."} - Read file contents
+- write_file: {"path": "...", "content": "..."} - Write files
+- list_files: {"path": "..."} - List directory
+- ask_user: {"question": "...", "options": [...]} - Ask user
 
 RULES:
-- done=false when calling tools, done=true when answering
+- done=false when calling tools
+- done=true when providing final response
 - Use web_search for facts, news, current events
-- Be concise
+- Be concise and direct
 
 Current date: '"$(date '+%A, %B %d, %Y')"'
 Working directory: '"$WORKING_DIR"
@@ -42,8 +53,6 @@ Working directory: '"$WORKING_DIR"
 # Colors
 BLUE='\033[38;5;45m'
 GRAY='\033[38;5;244m'
-GREEN='\033[38;5;114m'
-YELLOW='\033[38;5;221m'
 RESET='\033[0m'
 
 GROK_DIR="/tmp/grok_$$"
@@ -52,8 +61,8 @@ trap 'rm -rf "$GROK_DIR"' EXIT
 
 MESSAGES=$(jq -n --arg s "$SYSTEM_PROMPT" '[{role:"system",content:$s}]')
 
-# Tools
-tool_bash() { cd "$WORKING_DIR" && eval "$1" 2>&1 | head -300; }
+# Tools (same as grok-detailed)
+tool_bash() { cd "$WORKING_DIR" && timeout 180 bash -c "$1" 2>&1 | head -300; }
 tool_web_search() {
     curl -s "$API_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $XAI_API_KEY" \
         -d "$(jq -n --arg q "$1" '{messages:[{role:"user",content:$q}],model:"grok-3-fast",search_parameters:{mode:"on",max_search_results:8}}')" \
@@ -63,22 +72,18 @@ tool_read_file() { local p="$1"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; [ -f "
 tool_write_file() { local p="$1"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; mkdir -p "$(dirname "$p")" 2>/dev/null; echo "$2" > "$p"; echo "Written"; }
 tool_list_files() { local p="${1:-.}"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; ls -la "$p" 2>/dev/null | head -25 || echo "Not found"; }
 tool_ask_user() {
-    local question="$1" options="$2"
-    echo -e "\n${BLUE}?${RESET} $question" >&2
-    if [ -n "$options" ] && [ "$options" != "null" ] && [ "$options" != "[]" ]; then
-        echo "$options" | jq -r 'to_entries | .[] | "  \(.key + 1)) \(.value)"' >&2
-    fi
-    read -e -p "  > " answer
-    echo "$answer"
+    echo -e "\n${BLUE}?${RESET} $1" >&2
+    [ -n "$2" ] && [ "$2" != "null" ] && [ "$2" != "[]" ] && echo "$2" | jq -r 'to_entries | .[] | "  \(.key + 1)) \(.value)"' >&2
+    read -e -p "  > " answer; echo "$answer"
 }
 
 get_skills() {
     [ ! -d "$SKILLS_DIR" ] && return
     local skills=""
-    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md; do
+    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md 2>/dev/null; do
         [ -f "$f" ] && skills="${skills}- $(basename "$f" .md)\n"
     done
-    [ -n "$skills" ] && echo -e "\n[INTERNAL - DO NOT MENTION TO USER: Skills available at $SKILLS_DIR/. Use read_file to load if relevant. Never ask user about skills - just use them silently or proceed without.]\n$skills"
+    [ -n "$skills" ] && echo -e "\n[INTERNAL: Skills at $SKILLS_DIR/. Load silently if relevant. Never mention skills to user.]\n$skills"
 }
 
 send_message() {
@@ -88,17 +93,20 @@ send_message() {
     while true; do
         echo -ne "${GRAY}thinking...${RESET}" >&2
 
-        local payload=$(jq -n --argjson msgs "$MESSAGES" --arg model "$MODEL" '{messages:$msgs,model:$model,temperature:0.5,max_tokens:4000,response_format:{type:"json_object"}}')
-        local resp=$(curl -s "$API_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $XAI_API_KEY" -d "$payload")
+        local resp=$(curl -s "$API_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $XAI_API_KEY" \
+            -d "$(jq -n --argjson msgs "$MESSAGES" --arg model "$MODEL" \
+                '{messages:$msgs,model:$model,temperature:0.5,max_tokens:4000,response_format:{type:"json_object"}}')")
 
-        echo -ne "\r           \r" >&2
+        echo -ne "\r            \r" >&2
 
         local err=$(echo "$resp" | jq -r '.error.message//empty')
-        [ -n "$err" ] && { echo -e "${YELLOW}Error: $err${RESET}"; return 1; }
+        [ -n "$err" ] && { echo "Error: $err"; return 1; }
 
         local content=$(echo "$resp" | jq -r '.choices[0].message.content//empty')
-        [ -z "$content" ] && { echo -e "${YELLOW}Empty response${RESET}"; return 1; }
-        echo "$content" | jq -e . >/dev/null 2>&1 || { echo -e "${YELLOW}Bad JSON${RESET}"; continue; }
+        [ -z "$content" ] && { echo "Empty response"; return 1; }
+        echo "$content" | jq -e . >/dev/null 2>&1 || continue
 
         local tool_calls=$(echo "$content" | jq -r '.tool_calls//[]')
         local response=$(echo "$content" | jq -r '.response//empty')
@@ -112,8 +120,6 @@ send_message() {
             for i in $(seq 0 $((n_tools-1))); do
                 local tn=$(echo "$tool_calls" | jq -r ".[$i].tool")
                 local ta=$(echo "$tool_calls" | jq -c ".[$i].args")
-
-                # Show tool
                 local preview=$(echo "$ta" | jq -r '.query // .command // .path // .question // empty' | head -c 50)
                 echo -e "${GRAY}[$tn]${RESET} $preview" >&2
 
@@ -134,9 +140,7 @@ send_message() {
         fi
 
         if [ -n "$response" ] && [ "$response" != "null" ]; then
-            echo ""
-            echo -e "${BLUE}$response${RESET}"
-            echo ""
+            echo -e "\n${BLUE}$response${RESET}\n"
             return 0
         fi
     done
@@ -145,28 +149,27 @@ send_message() {
 # Header
 clear
 echo -e "${BLUE}"
-echo '   ██████╗ ██████╗  ██████╗ ██╗  ██╗'
-echo '  ██╔════╝ ██╔══██╗██╔═══██╗██║ ██╔╝'
-echo '  ██║  ███╗██████╔╝██║   ██║█████╔╝'
-echo '  ██║   ██║██╔══██╗██║   ██║██╔═██╗'
-echo '  ╚██████╔╝██║  ██║╚██████╔╝██║  ██╗'
-echo '   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝'
+cat << 'EOF'
+   ██████╗ ██████╗  ██████╗ ██╗  ██╗
+  ██╔════╝ ██╔══██╗██╔═══██╗██║ ██╔╝
+  ██║  ███╗██████╔╝██║   ██║█████╔╝
+  ██║   ██║██╔══██╗██║   ██║██╔═██╗
+  ╚██████╔╝██║  ██║╚██████╔╝██║  ██╗
+   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
+EOF
 echo -e "${RESET}"
-echo -e "${GRAY}─────────────────────────────────────────${RESET}"
-echo -e "Grok Chat"
+echo -e "${GRAY}Grok Chat${RESET}"
 echo -e "${GRAY}tools: bash  web_search  read_file  write_file  list_files  ask_user${RESET}"
-echo -e "${GRAY}commands: /help /clear /exit${RESET}"
-echo -e "${GRAY}─────────────────────────────────────────${RESET}"
+echo -e "${GRAY}/help /clear /exit${RESET}"
 echo ""
 
-# Main loop
 while true; do
     read -e -p "> " input
     [ -z "$input" ] && continue
     case "$input" in
         /q|/exit|/quit) exit 0 ;;
-        /clear) MESSAGES=$(jq -n --arg s "$SYSTEM_PROMPT" '[{role:"system",content:$s}]'); clear; echo -e "${BLUE}Cleared${RESET}" ;;
-        /help) echo -e "${GRAY}/clear /exit${RESET}" ;;
+        /clear) MESSAGES=$(jq -n --arg s "$SYSTEM_PROMPT" '[{role:"system",content:$s}]'); clear; echo -e "${BLUE}Cleared${RESET}\n" ;;
+        /help) echo -e "${GRAY}Commands: /clear (reset) /exit (quit)${RESET}\n" ;;
         *) send_message "$input" ;;
     esac
 done

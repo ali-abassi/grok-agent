@@ -10,10 +10,17 @@
 # GROK AGENT v1.0 - Minimal agentic chat
 # ============================================================================
 
-source ~/.claude/.env 2>/dev/null
-XAI_API_KEY="${GROK_API_KEY:-}"
+# Load API key from .env file (check multiple locations)
+[ -f ".env" ] && source .env
+[ -f "$HOME/.env" ] && source "$HOME/.env"
+[ -f "$HOME/.grok/.env" ] && source "$HOME/.grok/.env"
+XAI_API_KEY="${GROK_API_KEY:-$XAI_API_KEY}"
 
-[ -z "$XAI_API_KEY" ] && echo "Error: GROK_API_KEY not found" && exit 1
+if [ -z "$XAI_API_KEY" ]; then
+    echo "Error: GROK_API_KEY not found"
+    echo "Create a .env file with: GROK_API_KEY=your-key-here"
+    exit 1
+fi
 
 # ============================================================================
 # CONFIG
