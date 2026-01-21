@@ -1,17 +1,17 @@
 # Grok Agent
 
-A minimal agentic harness for xAI's Grok models. Two display modes, same engine.
+A minimal agentic harness for xAI's Grok models. 
 
 ## Why Grok?
 
 - **2M token context** - Largest context window available (vs 200k for Claude/GPT)
-- **Fast** - grok-4-1-fast lives up to its name
+- **Fast** - grok-4-1-fast 
 - **Smart** - Excellent reasoning and tool use
 - **Cheap** - $2/M input, $10/M output
 
 ## What Makes This Unique
 
-- **JSON-controlled loop** - Model outputs JSON that decides whether to continue or stop
+- **JSON-controlled loop** - Model outputs JSON that decides whether to continue or stop, includes confidence, self check, and exit conditions. 
 - **Same engine, two views** - `grok` (minimal) and `grok-detailed` (verbose) share identical logic
 - **Skills system** - Loadable knowledge files the agent uses silently
 - **Bare bones** - Easy to understand, easy to extend
