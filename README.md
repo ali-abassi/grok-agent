@@ -275,11 +275,15 @@ COMPACT_THRESHOLD=75       # auto-compact at N% context
 
 Ideas for building on this:
 
-- Add memory (persist across sessions)
-- Add RAG (vector search)
-- Add more tools (APIs, databases)
-- Add planning (multi-step decomposition)
-- Add streaming (show tokens as they generate)
+- **Memory** - Persist facts and context across sessions
+- **MCP tools** - Connect to Model Context Protocol servers for external integrations
+- **Self-healing** - Detect errors and automatically retry with different approaches
+- **RAG** - Vector search over documents
+- **Cron jobs** - Schedule agents to run periodically
+- **Proactive agents** - Agents that monitor and act without user prompts
+- **Sub-agents** - Spawn specialized agents for complex subtasks
+- **Streaming** - Show tokens as they generate
+- **Planning** - Multi-step task decomposition before execution
 
 ---
 
