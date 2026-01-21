@@ -161,7 +161,7 @@ echo -e "${RESET}"
 echo -e "Grok Chat"
 echo -e "${GRAY}tools: bash  web_search  read_file  write_file  list_files  ask_user${RESET}"
 echo -e "${GRAY}/help /clear /exit${RESET}"
-echo -e "${GRAY}for detailed view (costs, thinking, progress): grok-detailed${RESET}"
+echo -e "${GRAY}verbose mode (costs, thinking, progress): grok-verbose${RESET}"
 echo ""
 
 while true; do

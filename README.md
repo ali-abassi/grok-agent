@@ -11,8 +11,8 @@ A minimal agentic harness for xAI's Grok models.
 
 ## What Makes This Unique
 
-- **JSON-controlled loop** - Model outputs JSON that decides whether to continue or stop, includes confidence, self check, and exit conditions. 
-- **Same engine, two views** - `grok` (minimal) and `grok-detailed` (verbose) share identical logic
+- **JSON-controlled loop** - Model outputs JSON that decides whether to continue or stop, includes confidence, self check, and exit conditions
+- **Same engine, two views** - `grok` (minimal) and `grok-verbose` (verbose) share identical logic
 - **Skills system** - Loadable knowledge files the agent uses silently
 - **Bare bones** - Easy to understand, easy to extend
 
@@ -31,8 +31,8 @@ cp .env.example ~/.grok/.env
 # Edit ~/.grok/.env and add your key from https://console.x.ai
 
 # 3. Install scripts
-cp grok grok-detailed ~/.local/bin/
-chmod +x ~/.local/bin/grok ~/.local/bin/grok-detailed
+cp grok grok-verbose ~/.local/bin/
+chmod +x ~/.local/bin/grok ~/.local/bin/grok-verbose
 
 # 4. (Optional) Install default skill
 mkdir -p ~/.local/bin/skills
@@ -40,7 +40,7 @@ cp skills/skill-creation.md ~/.local/bin/skills/
 
 # 5. Run
 grok           # minimal output
-grok-detailed  # verbose output
+grok-verbose  # verbose output
 ```
 
 ---
@@ -61,7 +61,7 @@ It's 58°F and foggy in San Francisco.
 >
 ```
 
-### `grok-detailed` - Verbose Mode
+### `grok-verbose` - Verbose Mode
 
 Full visibility: session stats, task progress, thinking, confidence scores.
 
