@@ -1,6 +1,23 @@
 # Grok Agent
 
-A minimal agentic harness for xAI's Grok models. Two modes: clean conversational (`grok`) and detailed debugging (`grok-detailed`).
+A minimal agentic harness for xAI's Grok models. Designed to be bare bones so you can learn how agent loops work and build upon it.
+
+## Why Grok?
+
+- **2 million token context window** - Significantly larger than Claude, GPT-4, or other models
+- **Incredibly fast** - grok-4-1-fast lives up to its name
+- **Smart** - Excellent reasoning and tool use
+- **Cheap** - $2/M input, $10/M output tokens
+
+## What Makes This Unique
+
+This harness demonstrates core agentic patterns:
+
+1. **JSON Structured Output** - The model outputs valid JSON that controls whether the loop continues or stops
+2. **Self-Critique** - The detailed mode includes self-review with grading and improvement suggestions
+3. **Exit Conditions** - Define completion criteria upfront, track progress toward them
+4. **Skills System** - Loadable knowledge modules the agent uses silently when relevant
+5. **Bare Bones Design** - Intentionally minimal so you can understand and extend it
 
 ## Quick Start
 
@@ -11,6 +28,9 @@ echo 'GROK_API_KEY=your-key-here' >> ~/.claude/.env
 # Copy to PATH
 cp grok grok-detailed ~/.local/bin/
 chmod +x ~/.local/bin/grok ~/.local/bin/grok-detailed
+
+# Create skills directory
+mkdir -p ~/.local/bin/skills
 
 # Run
 grok           # minimal mode
@@ -24,7 +44,7 @@ grok-detailed  # verbose mode
 Clean back-and-forth conversation. Shows only:
 - Your input
 - Tool calls (one line each)
-- Agent response
+- Agent response (in blue)
 
 ```
 > what's the weather in sf
@@ -37,117 +57,155 @@ It's 62°F and partly cloudy in San Francisco.
 
 ### `grok-detailed` - Detailed Mode
 
-Full visibility into agent reasoning:
-- Session ID, cost, context usage, tool count
+Full visibility into agent reasoning. Shows:
+- Session ID, cost tracking, context usage
 - Task description per iteration
 - Goal and exit conditions
 - Progress tracking (completed/current/remaining)
-- Thinking/reasoning
-- Confidence score
-- Timestamps
+- Thinking/reasoning process
+- Confidence scores
+- Self-review grades
 
-Use this mode when debugging or understanding agent behavior.
+Use this mode when debugging, learning, or understanding agent behavior.
 
 ---
 
 ## How It Works
 
-### The Structured JSON Contract
+### The JSON Contract
 
-The agent is instructed to always respond with valid JSON. This creates a predictable contract between the model and the harness.
+The agent always responds with structured JSON. This creates a predictable contract between the model and the harness.
 
+**Minimal mode:**
 ```json
 {
-  "tool_calls": [
-    {"tool": "tool_name", "args": {"param": "value"}}
-  ],
-  "response": "Final answer to user (null if calling tools)",
-  "done": true
+  "tool_calls": [{"tool": "bash", "args": {"command": "ls"}}],
+  "response": null,
+  "done": false
 }
 ```
 
-#### Fields
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `tool_calls` | array | Tools to execute. Empty `[]` when giving final response |
-| `response` | string/null | The answer to show user. `null` while tools are running |
-| `done` | boolean | `false` = keep iterating, `true` = conversation turn complete |
-
-#### Detailed Mode Additional Fields
-
-`grok-detailed` uses an extended schema:
-
+**Detailed mode (extended):**
 ```json
 {
-  "thinking": "Brief strategic reasoning",
-  "task": "Current action (5 words max)",
-  "goal": "High-level objective",
-  "exit_conditions": ["Condition 1", "Condition 2"],
+  "thinking": "Need to search for current info",
+  "task": "Search weather data",
+  "goal": "Get SF weather",
+  "exit_conditions": ["Weather data retrieved", "Answer provided"],
   "progress": {
-    "completed": ["Done items"],
-    "current": "Working on now",
-    "remaining": ["Still to do"]
+    "completed": [],
+    "current": "Weather data retrieved",
+    "remaining": ["Answer provided"]
   },
-  "blockers": null,
-  "tool_calls": [...],
-  "response": "...",
-  "confidence": 0-100,
-  "done": true
+  "tool_calls": [{"tool": "web_search", "args": {"query": "SF weather"}}],
+  "response": null,
+  "confidence": 0,
+  "done": false
 }
 ```
 
-### The Harness Loop
+### The Loop
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    USER INPUT                           │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│              BUILD MESSAGES ARRAY                       │
-│  [system_prompt, ...history, user_input]                │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│              CALL GROK API                              │
-│  POST /v1/chat/completions                              │
-│  response_format: {type: "json_object"}                 │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-                      ▼
-┌─────────────────────────────────────────────────────────┐
-│              PARSE JSON RESPONSE                        │
-└─────────────────────┬───────────────────────────────────┘
-                      │
-            ┌─────────┴─────────┐
-            │                   │
-            ▼                   ▼
-     tool_calls?            response?
-            │                   │
-            ▼                   ▼
-┌───────────────────┐   ┌───────────────────┐
-│  EXECUTE TOOLS    │   │  DISPLAY RESPONSE │
-│  Collect results  │   │  done=true        │
-└─────────┬─────────┘   └───────────────────┘
-          │
-          ▼
-┌───────────────────┐
-│ APPEND RESULTS    │
-│ TO MESSAGES       │
-└─────────┬─────────┘
-          │
-          └──────► LOOP BACK TO API CALL
+USER INPUT
+    │
+    ▼
+┌─────────────────────────┐
+│  Send to Grok API       │
+│  (with JSON mode)       │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  Parse JSON response    │
+└───────────┬─────────────┘
+            │
+    ┌───────┴───────┐
+    │               │
+    ▼               ▼
+tool_calls?     response?
+    │               │
+    ▼               ▼
+┌──────────┐  ┌──────────────┐
+│ Execute  │  │ Display      │
+│ tools    │  │ response     │
+│          │  │ done=true    │
+└────┬─────┘  └──────────────┘
+     │
+     ▼
+ Append results
+ to messages
+     │
+     └──────► LOOP BACK
 ```
 
-### Key Design Decisions
+**Key insight:** The `done` field controls the loop. When `done=false`, keep iterating. When `done=true`, show the response and wait for next user input.
 
-1. **JSON Mode** - Using `response_format: {type: "json_object"}` forces valid JSON output
-2. **Iteration Loop** - Agent keeps calling tools until `done=true`
-3. **Tool Results as User Messages** - Tool outputs are appended as user messages so the agent sees them
-4. **System Prompt Contract** - The JSON schema is defined in the system prompt
+---
+
+## Skills System
+
+Skills are markdown files that provide domain-specific knowledge. The agent loads them silently when relevant - it never asks the user about skills.
+
+### Setting Up Skills
+
+```bash
+# Create skills directory (same location as the scripts)
+mkdir -p ~/.local/bin/skills
+
+# Skills are markdown files
+~/.local/bin/skills/
+├── skill-creation.md    # Default: how to create new skills
+├── research.md          # Your custom skills
+├── coding.md
+└── writing.md
+```
+
+### Skill File Format
+
+```markdown
+# Skill Name
+
+Brief description of what this skill does.
+
+## When to Use
+
+Conditions that trigger this skill (e.g., "when user asks for research")
+
+## Instructions
+
+Step-by-step guide for the agent:
+1. First do this
+2. Then do that
+3. Finally return this
+
+## Examples
+
+Input: "research topic X"
+Output: [what the agent should produce]
+
+## Tools to Use
+
+- web_search for finding info
+- write_file for saving results
+```
+
+### Default Skill: skill-creation
+
+The harness includes a `skill-creation.md` skill. Just ask:
+
+```
+> create a skill for writing tweets
+```
+
+The agent will create `~/.local/bin/skills/tweets.md` with the proper format.
+
+### How Skills Work
+
+1. On each message, available skills are injected (names only)
+2. If relevant, agent uses `read_file` to load the full skill
+3. Agent follows the skill's instructions silently
+4. User never sees skill mechanics - just better results
 
 ---
 
@@ -182,12 +240,9 @@ tool_my_tool() {
 
 #### 2. Add to the Execute Switch
 
-In the main loop where tools are executed:
-
 ```bash
 case "$tn" in
     bash) tr=$(tool_bash "$(echo "$ta"|jq -r '.command')") ;;
-    web_search) tr=$(tool_web_search "$(echo "$ta"|jq -r '.query')") ;;
     # ... existing tools ...
     my_tool) tr=$(tool_my_tool "$(echo "$ta"|jq -r '.arg1')" "$(echo "$ta"|jq -r '.arg2')") ;;
     *) tr="Unknown tool" ;;
@@ -196,117 +251,81 @@ esac
 
 #### 3. Add to System Prompt
 
-Update the TOOLS section in the system prompt:
-
 ```
 TOOLS:
 - bash: {"command": "..."}
-- web_search: {"query": "..."}
-- my_tool: {"arg1": "...", "arg2": "..."}  # Add your tool
+- my_tool: {"arg1": "...", "arg2": "..."}
 ```
 
-#### Example: Adding a Calculator Tool
+#### Example: Calculator Tool
 
 ```bash
 # 1. Function
 tool_calc() {
-    local expr="$1"
-    echo "$expr" | bc -l 2>/dev/null || echo "Error"
+    echo "$1" | bc -l 2>/dev/null || echo "Error"
 }
 
-# 2. In execute switch
+# 2. In switch
 calc) tr=$(tool_calc "$(echo "$ta"|jq -r '.expression')") ;;
 
-# 3. In system prompt
-- calc: {"expression": "..."} - Evaluate math expression
+# 3. In prompt
+- calc: {"expression": "..."} - Evaluate math
 ```
 
 ### Tool Guidelines
 
-- **Return strings** - Tool output is concatenated into messages
-- **Truncate output** - Use `| head -N` to limit large outputs
-- **Handle errors** - Return error messages, don't crash
-- **Be stateless** - Tools shouldn't depend on previous tool calls
-- **Timeout long operations** - Wrap slow commands
-
----
-
-## Skills System
-
-Both modes support a skills system for domain-specific knowledge.
-
-```
-~/.local/bin/skills/
-├── coding.md
-├── research.md
-└── writing.md
-```
-
-Skills are markdown files that get injected into the context when relevant. The agent can read them with `read_file`.
+- Return strings (output goes into messages)
+- Truncate large outputs with `| head -N`
+- Handle errors gracefully
+- Keep tools stateless
+- Add timeouts for slow operations
 
 ---
 
 ## Configuration
 
-### Environment Variables
+### Environment
 
 ```bash
 # Required
 GROK_API_KEY=xai-...
+```
 
-# In script (edit to customize)
-MODEL="grok-4-1-fast"      # or grok-3-fast for speed
-COST_LIMIT=10.00           # Max spend per session (detailed mode)
-COMPACT_THRESHOLD=75       # Auto-compact at N% context (detailed mode)
+### Script Settings
+
+Edit the scripts to customize:
+
+```bash
+MODEL="grok-4-1-fast"      # or grok-3-fast
+COST_LIMIT=10.00           # Max spend (detailed mode)
+COMPACT_THRESHOLD=75       # Auto-compact at N% context
 ```
 
 ### Commands
 
-| Command | Description |
-|---------|-------------|
-| `/clear` | Reset conversation |
-| `/exit` | Quit |
-| `/help` | Show commands |
-| `/cd DIR` | Change working directory (detailed) |
-| `/sessions` | List saved sessions (detailed) |
-| `/resume ID` | Resume session (detailed) |
-| `/compact` | Force context compaction (detailed) |
-| `/cost N` | Set cost limit (detailed) |
+| Command | Mode | Description |
+|---------|------|-------------|
+| `/clear` | both | Reset conversation |
+| `/exit` | both | Quit |
+| `/help` | both | Show commands |
+| `/cd DIR` | detailed | Change directory |
+| `/sessions` | detailed | List saved sessions |
+| `/resume ID` | detailed | Resume session |
+| `/compact` | detailed | Force context compaction |
+| `/cost N` | detailed | Set cost limit |
 
 ---
 
-## API Reference
+## Extending the Harness
 
-### Request
+This is intentionally minimal. Ideas for extending:
 
-```bash
-curl https://api.x.ai/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $XAI_API_KEY" \
-  -d '{
-    "messages": [...],
-    "model": "grok-4-1-fast",
-    "temperature": 0.5,
-    "max_tokens": 4000,
-    "response_format": {"type": "json_object"}
-  }'
-```
-
-### Response
-
-```json
-{
-  "choices": [{
-    "message": {
-      "content": "{\"tool_calls\":[],\"response\":\"...\",\"done\":true}"
-    }
-  }],
-  "usage": {
-    "prompt_tokens": 1234,
-    "completion_tokens": 567
-  }
-}
-```
+- **Add memory** - Persist facts across sessions
+- **Add RAG** - Vector search over documents
+- **Add more tools** - APIs, databases, services
+- **Add planning** - Multi-step task decomposition
+- **Add evaluation** - Track success rates
+- **Add streaming** - Show responses as they generate
 
 ---
 

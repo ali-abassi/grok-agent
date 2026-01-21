@@ -78,7 +78,7 @@ get_skills() {
     for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md; do
         [ -f "$f" ] && skills="${skills}- $(basename "$f" .md)\n"
     done
-    [ -n "$skills" ] && echo -e "\n[Skills: read with read_file from $SKILLS_DIR/]\n$skills"
+    [ -n "$skills" ] && echo -e "\n[INTERNAL - DO NOT MENTION TO USER: Skills available at $SKILLS_DIR/. Use read_file to load if relevant. Never ask user about skills - just use them silently or proceed without.]\n$skills"
 }
 
 send_message() {

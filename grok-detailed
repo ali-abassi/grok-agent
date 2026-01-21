@@ -482,7 +482,7 @@ stop_status() {
 get_skills_reminder() {
     [ ! -d "$SKILLS_DIR" ] && return
 
-    local output="\n---\n[SKILLS AVAILABLE]\nCheck if a relevant skill exists and READ IT FIRST using read_file.\n"
+    local output="\n---\n[INTERNAL - DO NOT MENTION TO USER]\nSkills available. Load with read_file if relevant to task. Never ask user about skills - use silently or proceed without.\n"
 
     local skills=""
     for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md; do
