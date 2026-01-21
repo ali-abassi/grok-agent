@@ -86,12 +86,12 @@ send_message() {
     MESSAGES=$(echo "$MESSAGES" | jq --arg m "$input" '. + [{role:"user",content:$m}]')
 
     while true; do
-        echo -ne "${GRAY}...${RESET}" >&2
+        echo -ne "${GRAY}thinking...${RESET}" >&2
 
         local payload=$(jq -n --argjson msgs "$MESSAGES" --arg model "$MODEL" '{messages:$msgs,model:$model,temperature:0.5,max_tokens:4000,response_format:{type:"json_object"}}')
         local resp=$(curl -s "$API_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $XAI_API_KEY" -d "$payload")
 
-        echo -ne "\r   \r" >&2
+        echo -ne "\r           \r" >&2
 
         local err=$(echo "$resp" | jq -r '.error.message//empty')
         [ -n "$err" ] && { echo -e "${YELLOW}Error: $err${RESET}"; return 1; }
@@ -152,6 +152,12 @@ echo '  ██║   ██║██╔══██╗██║   ██║██
 echo '  ╚██████╔╝██║  ██║╚██████╔╝██║  ██╗'
 echo '   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝'
 echo -e "${RESET}"
+echo -e "${GRAY}─────────────────────────────────────────${RESET}"
+echo -e "Grok Chat"
+echo -e "${GRAY}tools: bash  web_search  read_file  write_file  list_files  ask_user${RESET}"
+echo -e "${GRAY}commands: /help /clear /exit${RESET}"
+echo -e "${GRAY}─────────────────────────────────────────${RESET}"
+echo ""
 
 # Main loop
 while true; do

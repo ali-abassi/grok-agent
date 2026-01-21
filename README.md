@@ -303,16 +303,22 @@ COMPACT_THRESHOLD=75       # Auto-compact at N% context
 
 ### Commands
 
-| Command | Mode | Description |
-|---------|------|-------------|
-| `/clear` | both | Reset conversation |
-| `/exit` | both | Quit |
-| `/help` | both | Show commands |
-| `/cd DIR` | detailed | Change directory |
-| `/sessions` | detailed | List saved sessions |
-| `/resume ID` | detailed | Resume session |
-| `/compact` | detailed | Force context compaction |
-| `/cost N` | detailed | Set cost limit |
+**Both modes:**
+| Command | Description |
+|---------|-------------|
+| `/clear` | Reset conversation |
+| `/exit` | Quit (also `/q`, `/quit`) |
+| `/help` | Show available commands |
+
+**Detailed mode only:**
+| Command | Description |
+|---------|-------------|
+| `/cd DIR` | Change working directory |
+| `/sessions` | List saved sessions |
+| `/resume ID` | Resume a saved session |
+| `/compact` | Force context compaction |
+| `/cost N` | Set cost limit (e.g., `/cost 20`) |
+| `/tools` | List available tools |
 
 ---
 
