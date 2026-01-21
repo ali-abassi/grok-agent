@@ -34,7 +34,7 @@ cp .env.example ~/.grok/.env
 cp grok grok-verbose ~/.local/bin/
 chmod +x ~/.local/bin/grok ~/.local/bin/grok-verbose
 
-# 4. (Optional) Install default skill
+# 4. Install default skill
 mkdir -p ~/.local/bin/skills
 cp skills/skill-creation.md ~/.local/bin/skills/
 
