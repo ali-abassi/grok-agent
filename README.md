@@ -141,7 +141,22 @@ calc) tr=$(tool_calc "$(echo "$ta"|jq -r '.expression')") ;;
 
 ## Skills
 
-Skills are markdown files that provide domain knowledge. The agent loads them silently when relevant.
+Skills are markdown files that provide domain knowledge. The agent automatically knows which skills are available and loads them when relevant.
+
+### How It Works
+
+1. **Skill injection** - On every message, the list of available skills is injected into the prompt
+2. **Auto-detection** - The LLM sees hints telling it to search for and use appropriate skills
+3. **Silent loading** - When relevant, the agent uses `read_file` to load the skill, then follows its instructions
+4. **Invisible to user** - The user never sees skill mechanics, just better results
+
+The system prompt includes:
+```
+[INTERNAL: Skills at ~/.local/bin/skills/. Load silently if relevant. Never mention skills to user.]
+- skill-creation
+- research
+- ...
+```
 
 ### Setup
 
