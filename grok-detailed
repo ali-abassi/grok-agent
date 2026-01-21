@@ -1,0 +1,697 @@
+#!/bin/bash
+# ============================================================================
+#     ██████╗ ██████╗  ██████╗ ██╗  ██╗     █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+#    ██╔════╝ ██╔══██╗██╔═══██╗██║ ██╔╝    ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+#    ██║  ███╗██████╔╝██║   ██║█████╔╝     ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║
+#    ██║   ██║██╔══██╗██║   ██║██╔═██╗     ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║
+#    ╚██████╔╝██║  ██║╚██████╔╝██║  ██╗    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║
+#     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝
+# ============================================================================
+# GROK AGENT v1.0 - Minimal agentic chat
+# ============================================================================
+
+source ~/.claude/.env 2>/dev/null
+XAI_API_KEY="${GROK_API_KEY:-}"
+
+[ -z "$XAI_API_KEY" ] && echo "Error: GROK_API_KEY not found" && exit 1
+
+# ============================================================================
+# CONFIG
+# ============================================================================
+MODEL="grok-4-1-fast"
+API_URL="https://api.x.ai/v1/chat/completions"
+VERSION="1.0"
+WORKING_DIR="$(pwd)"
+
+# Config defaults
+SAVE_SESSIONS=true
+SESSION_DIR="$HOME/.local/share/grok-agent/sessions"
+
+# Context and cost limits
+CONTEXT_LIMIT=2000000
+COMPACT_THRESHOLD=75
+COST_LIMIT=10.00
+TOOL_TIMEOUT=180
+
+# Skills directory
+SCRIPT_LOCATION="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_DIR="${SCRIPT_LOCATION}/skills"
+
+# System prompt
+SYSTEM_PROMPT_BASE='You are Grok Agent, an AI assistant in a terminal. Direct. Helpful. Gets things done.
+
+CORE PHILOSOPHY:
+- Every problem is solvable
+- When stuck, try a different approach
+- USE YOUR TOOLS - you have bash, file operations, web search
+- CHECK YOUR SKILLS FIRST - read relevant skills before starting tasks
+- Never say "I cannot" - say "Let me try this instead"
+
+TOOL-FIRST MINDSET:
+- Default to using tools, not generating from memory
+- Web search for ANY factual claim (scores, dates, prices, news)
+- Chain tools: search -> read -> write -> confirm
+- When in doubt, search. When certain, still verify.
+
+OUTPUT FORMAT - You MUST respond with valid JSON only:
+{
+  "thinking": "Brief strategic reasoning (1-2 sentences)",
+  "task": "Current action (5 words max)",
+  "goal": "High-level objective (set on first response, keep consistent)",
+  "exit_conditions": ["Condition 1 to complete", "Condition 2 to complete"],
+  "progress": {
+    "completed": ["Conditions already met"],
+    "current": "Condition being worked on now",
+    "remaining": ["Conditions still to do"]
+  },
+  "blockers": null or "Description of what is blocking progress",
+  "tool_calls": [{"tool": "tool_name", "args": {"param": "value"}}],
+  "response": "Your final answer to user (null if calling tools)",
+  "confidence": 0-100,
+  "done": true or false
+}
+
+AVAILABLE TOOLS:
+
+## Core Tools
+- bash: Run any shell command. Args: {"command": "..."}
+  IMPORTANT: 3min timeout. Use & for servers/long processes.
+- read_file: Read file. Args: {"path": "..."}
+- write_file: Write file. Args: {"path": "...", "content": "..."}
+- list_files: List directory. Args: {"path": "..."}
+- ask_user: Ask user a question. Args: {"question": "...", "options": [...]}
+- web_search: Search the web via Grok. Args: {"query": "..."}
+
+CRITICAL RULES:
+1. ALWAYS use tools for factual queries - sports, dates, events, weather, prices
+2. Include the current year in search queries for recent events
+3. NEVER give up. If approach A fails, try B, C, D.
+4. Chain tools aggressively: research -> verify -> act -> confirm
+5. Parallel tool calls when independent - speed matters
+
+EXECUTION RULES:
+- Set done=false when calling tools, done=true ONLY when ALL exit_conditions met
+- On FIRST response, define goal and exit_conditions
+- Update progress each iteration
+- Use ask_user when you need clarification
+
+CONFIDENCE:
+- 95+ = tool-verified fact
+- 80-94 = high certainty
+- <80 = uncertain (USE A TOOL!)
+
+RESPONSE STYLE:
+- Plain text only (NO markdown formatting)
+- Bullet points for lists
+- Concise and direct'
+
+# Build system prompt with current date
+CURRENT_DATE=$(date "+%A, %B %d, %Y")
+SYSTEM_PROMPT="${SYSTEM_PROMPT_BASE}
+
+CURRENT DATE: ${CURRENT_DATE}
+Use this date for all date-relative queries (today, yesterday, this week, etc.)"
+
+# Colors
+C_G2='\033[38;5;238m'
+C_G3='\033[38;5;244m'
+C_G4='\033[38;5;250m'
+C_CYAN='\033[38;5;80m'
+C_BLUE='\033[38;5;75m'
+C_PURPLE='\033[38;5;141m'
+C_MAGENTA='\033[38;5;205m'
+C_GREEN='\033[38;5;114m'
+C_ORANGE='\033[38;5;209m'
+C_RED='\033[38;5;203m'
+C_YELLOW='\033[38;5;221m'
+C_TEAL='\033[38;5;43m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# Layout
+TERM_WIDTH=$(tput cols 2>/dev/null || echo 120)
+[ "$TERM_WIDTH" -lt 80 ] && TERM_WIDTH=80
+CONTENT_WIDTH=$((TERM_WIDTH - 8))
+DIVIDER_WIDTH=$((TERM_WIDTH - 4))
+
+# Cost per million tokens
+COST_INPUT_PER_M=2.00
+COST_OUTPUT_PER_M=10.00
+
+# ============================================================================
+# IPC
+# ============================================================================
+GROK_DIR="/tmp/grok_agent_$$"
+TOOL_COUNT_FILE="$GROK_DIR/tools"
+
+mkdir -p "$GROK_DIR"
+mkdir -p "$SESSION_DIR" 2>/dev/null
+echo "0" > "$TOOL_COUNT_FILE"
+
+# Session tracking
+SESSION_ID=$(date +%s | md5 | cut -c1-8)
+MSG_COUNT=0
+INPUT_TOK=0
+OUTPUT_TOK=0
+COST="0.000000"
+CANCELLED=false
+INPUT_QUEUE="$GROK_DIR/queue.txt"
+: > "$INPUT_QUEUE"
+
+# Cleanup
+cleanup() {
+    tput cnorm 2>/dev/null
+    rm -f "$GROK_DIR/processing" 2>/dev/null
+    [ -n "$INPUT_LISTENER_PID" ] && kill $INPUT_LISTENER_PID 2>/dev/null
+
+    if [ "$SAVE_SESSIONS" = "true" ] && [ "$MSG_COUNT" -gt 0 ]; then
+        local sf="$SESSION_DIR/${SESSION_ID}.json"
+        jq -n --arg id "$SESSION_ID" --argjson msgs "$MESSAGES" --arg dir "$WORKING_DIR" \
+            '{session_id:$id,messages:$msgs,working_dir:$dir,saved:"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' > "$sf" 2>/dev/null
+        echo -e "   ${C_G3}Session saved: $sf${RESET}"
+    fi
+
+    local tc=$(cat "$TOOL_COUNT_FILE" 2>/dev/null || echo "0")
+    echo -e "   ${C_G3}Session ${SESSION_ID} · \$$(printf "%.4f" "$COST") · ${tc} tools${RESET}"
+    rm -rf "$GROK_DIR"
+}
+trap cleanup EXIT
+
+# ============================================================================
+# Context Management
+# ============================================================================
+get_context_usage() {
+    local total=$((INPUT_TOK + OUTPUT_TOK))
+    local pct=$((total * 100 / CONTEXT_LIMIT))
+    echo "$pct"
+}
+
+check_cost_limit() {
+    local over=$(awk -v c="$COST" -v l="$COST_LIMIT" 'BEGIN{print (c >= l) ? 1 : 0}')
+    [ "$over" -eq 1 ] && return 0 || return 1
+}
+
+compact_messages() {
+    echo -e "\n   ${C_MAGENTA}Compacting ($(get_context_usage)% context used)...${RESET}" >&2
+
+    local msg_count=$(echo "$MESSAGES" | jq 'length - 1')
+    [ "$msg_count" -lt 8 ] && { echo -e "   ${C_G3}Too few messages${RESET}" >&2; return; }
+
+    local summarize_count=$((msg_count / 2))
+    local keep_count=$((msg_count - summarize_count))
+
+    local system_msg=$(echo "$MESSAGES" | jq '.[0]')
+    local to_keep=$(echo "$MESSAGES" | jq ".[$((summarize_count + 1)):]")
+
+    local summary_msg=$(jq -n '{role:"user",content:"[Previous conversation compacted to save context]"}')
+    local ack_msg='{"role":"assistant","content":"{\"thinking\":\"Context compacted\",\"task\":\"Resuming\",\"done\":false}"}'
+
+    MESSAGES=$(jq -n --argjson sys "[$system_msg]" --argjson sum "[$summary_msg, $ack_msg]" --argjson keep "$to_keep" '$sys + $sum + $keep')
+
+    INPUT_TOK=$((INPUT_TOK / 2))
+    OUTPUT_TOK=$((OUTPUT_TOK / 2))
+
+    local new_count=$(echo "$MESSAGES" | jq 'length')
+    echo -e "   ${C_GREEN}Compacted: ${msg_count} -> ${new_count} messages${RESET}" >&2
+}
+
+check_and_compact() {
+    local usage=$(get_context_usage)
+    [ "$usage" -ge "$COMPACT_THRESHOLD" ] && compact_messages
+}
+
+# ============================================================================
+# Input Handling
+# ============================================================================
+PROCESSING=false
+
+start_input_listener() {
+    PROCESSING=true
+    (
+        while [ -f "$GROK_DIR/processing" ]; do
+            if read -rsn1 -t 0.5 key 2>/dev/null; then
+                if [[ "$key" == $'\e' ]]; then
+                    touch "$GROK_DIR/cancel"
+                    break
+                elif [[ -n "$key" ]]; then
+                    line="$key"
+                    read -r rest 2>/dev/null
+                    line="${line}${rest}"
+                    [ -n "$line" ] && echo "$line" >> "$INPUT_QUEUE"
+                fi
+            fi
+        done
+    ) &
+    INPUT_LISTENER_PID=$!
+}
+
+stop_input_listener() {
+    PROCESSING=false
+    rm -f "$GROK_DIR/processing" 2>/dev/null
+    [ -n "$INPUT_LISTENER_PID" ] && kill $INPUT_LISTENER_PID 2>/dev/null
+    wait $INPUT_LISTENER_PID 2>/dev/null
+    tput cnorm 2>/dev/null
+}
+
+check_cancelled() {
+    [ -f "$GROK_DIR/cancel" ] && { rm -f "$GROK_DIR/cancel"; CANCELLED=true; return 0; }
+    return 1
+}
+
+trap 'touch "$GROK_DIR/cancel"' SIGINT
+
+# ============================================================================
+# TOOLS
+# ============================================================================
+inc_tool() { echo $(($(cat "$TOOL_COUNT_FILE") + 1)) > "$TOOL_COUNT_FILE"; }
+
+tool_bash() { inc_tool; cd "$WORKING_DIR" && eval "$1" 2>&1 | head -500; }
+
+tool_web_search() {
+    inc_tool
+    local query="$1"
+    curl -s "$API_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $XAI_API_KEY" \
+        -d "$(jq -n --arg q "$query" '{messages:[{role:"user",content:$q}],model:"grok-3-fast",search_parameters:{mode:"on",max_search_results:10}}')" \
+        | jq -r '.choices[0].message.content // "No results"'
+}
+
+tool_read_file() { inc_tool; local p="$1"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; [ -f "$p" ] && head -c 30000 "$p" || echo "Not found"; }
+tool_write_file() { inc_tool; local p="$1"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; mkdir -p "$(dirname "$p")" 2>/dev/null; echo "$2" > "$p"; echo "Wrote $(wc -c <<< "$2") bytes"; }
+tool_list_files() { inc_tool; local p="${1:-.}"; [[ "$p" != /* ]] && p="$WORKING_DIR/$p"; ls -la "$p" 2>/dev/null | head -30 || echo "Not found"; }
+
+tool_ask_user() {
+    inc_tool
+    local question="$1"
+    local options_json="$2"
+
+    stop_input_listener
+
+    echo "" >&2
+    echo -e "   ${C_G2}┌─────────────────────────────────────────────────────────────────${RESET}" >&2
+    echo -e "   ${C_G2}│${RESET}  ${C_CYAN}?${RESET} ${BOLD}${question}${RESET}" >&2
+    echo -e "   ${C_G2}│${RESET}" >&2
+
+    local has_options=false
+    if [ -n "$options_json" ] && [ "$options_json" != "null" ] && [ "$options_json" != "[]" ]; then
+        local n_opts=$(echo "$options_json" | jq 'length' 2>/dev/null)
+        if [ "$n_opts" -gt 0 ] 2>/dev/null; then
+            has_options=true
+            for i in $(seq 1 $n_opts); do
+                local opt=$(echo "$options_json" | jq -r ".[$((i-1))]")
+                echo -e "   ${C_G2}│${RESET}    ${C_CYAN}${i}${C_G2}>${RESET} ${opt}" >&2
+            done
+            echo -e "   ${C_G2}│${RESET}" >&2
+        fi
+    fi
+
+    echo -e "   ${C_G2}└─────────────────────────────────────────────────────────────────${RESET}" >&2
+
+    read -e -p "   > " user_answer
+
+    if [ "$has_options" = true ] && [[ "$user_answer" =~ ^[0-9]+$ ]]; then
+        local idx=$((user_answer - 1))
+        local resolved=$(echo "$options_json" | jq -r ".[$idx] // empty")
+        [ -n "$resolved" ] && user_answer="$resolved"
+    fi
+
+    touch "$GROK_DIR/processing"
+    start_input_listener
+
+    echo "User answered: $user_answer"
+}
+
+tool_start() {
+    local name="$1" args="$2" icon color label
+
+    local path=$(echo "$args" | jq -r '.path // empty' 2>/dev/null)
+
+    # Check if this is a skill read
+    if [ "$name" = "read_file" ] && [[ "$path" == *"/skills/"* ]] && [[ "$path" == *.md ]]; then
+        local skill_name=$(basename "$path" .md)
+        echo -e "\n   ${C_MAGENTA}Skill:${RESET} ${BOLD}${skill_name}${RESET}" >&2
+        return
+    fi
+
+    case "$name" in
+        bash) icon=">" color="$C_ORANGE" label="BASH" ;;
+        web_search) icon="@" color="$C_TEAL" label="SEARCH" ;;
+        read_file) icon="<" color="$C_GREEN" label="READ" ;;
+        write_file) icon=">" color="$C_YELLOW" label="WRITE" ;;
+        list_files) icon="=" color="$C_CYAN" label="LIST" ;;
+        *) icon="*" color="$C_G3" label="TOOL" ;;
+    esac
+
+    local query=$(echo "$args" | jq -r '.query // empty' 2>/dev/null)
+    local cmd=$(echo "$args" | jq -r '.command // empty' 2>/dev/null)
+
+    echo -e "\n   ${C_G3}--- tool ---${RESET}" >&2
+    echo -e "   ${color}${icon} ${label}${RESET}" >&2
+    [ -n "$query" ] && echo -e "   ${C_G2}|${RESET} ${C_G4}query:${RESET} ${query:0:60}" >&2
+    [ -n "$path" ] && echo -e "   ${C_G2}|${RESET} ${C_G4}path:${RESET} ${path:0:60}" >&2
+    [ -n "$cmd" ] && echo -e "   ${C_G2}|${RESET} ${C_G4}cmd:${RESET} ${cmd:0:60}" >&2
+}
+
+execute_tool() {
+    local name="$1" args="$2"
+    local start_time=$(date +%s)
+
+    if [ "$name" = "ask_user" ]; then
+        local question=$(echo "$args" | jq -r '.question')
+        local options=$(echo "$args" | jq -c '.options // []')
+        result=$(tool_ask_user "$question" "$options")
+        echo "$result"
+        return
+    fi
+
+    tool_start "$name" "$args"
+    echo -ne "   ${C_G3}  ... running${RESET}" >&2
+    local result
+    case "$name" in
+        bash) result=$(tool_bash "$(echo "$args"|jq -r '.command')") ;;
+        web_search) result=$(tool_web_search "$(echo "$args"|jq -r '.query')") ;;
+        read_file) result=$(tool_read_file "$(echo "$args"|jq -r '.path')") ;;
+        write_file) result=$(tool_write_file "$(echo "$args"|jq -r '.path')" "$(echo "$args"|jq -r '.content')") ;;
+        list_files) result=$(tool_list_files "$(echo "$args"|jq -r '.path//"."')") ;;
+        *) result="Unknown tool" ;;
+    esac
+    local elapsed=$(($(date +%s) - start_time))
+    echo -e "\r   ${C_GREEN}  done${RESET} ${C_G2}${elapsed}s${RESET}     " >&2
+    echo "$result"
+}
+
+# ============================================================================
+# UI
+# ============================================================================
+make_divider() {
+    local char="${1:-=}" len="${2:-$DIVIDER_WIDTH}"
+    printf '%*s' "$len" | tr ' ' "$char"
+}
+
+print_header() {
+    clear
+    local C1='\033[38;5;51m'
+    local C2='\033[38;5;45m'
+    local C3='\033[38;5;39m'
+    local div=$(make_divider "=" "$DIVIDER_WIDTH")
+    echo -e "\n   ${C1}██████╗ ${C2}██████╗  ${C3}██████╗ ██╗  ██╗${RESET}"
+    echo -e "  ${C1}██╔════╝ ${C2}██╔══██╗${C3}██╔═══██╗██║ ██╔╝${RESET}    ${C_G3}v${VERSION}${RESET}"
+    echo -e "  ${C1}██║  ███╗${C2}██████╔╝${C3}██║   ██║█████╔╝${RESET}     ${C_G4}${MODEL}${RESET}"
+    echo -e "  ${C1}██║   ██║${C2}██╔══██╗${C3}██║   ██║██╔═██╗${RESET}"
+    echo -e "  ${C1}╚██████╔╝${C2}██║  ██║${C3}╚██████╔╝██║  ██╗${RESET}"
+    echo -e "  ${C1} ╚═════╝ ${C2}╚═╝  ╚═╝${C3} ╚═════╝ ╚═╝  ╚═╝${RESET}\n"
+    echo -e "   ${C_G2}${div}${RESET}"
+    echo -e "   ${C_G3}tools:${RESET} ${C_ORANGE}bash${RESET}  ${C_TEAL}web_search${RESET}  ${C_GREEN}read_file${RESET}  ${C_YELLOW}write_file${RESET}  ${C_CYAN}list_files${RESET}  ${C_CYAN}ask_user${RESET}"
+    echo -e "   ${C_G3}cancel:${RESET} ${C_YELLOW}esc${RESET}  ${C_G3}help:${RESET} ${C_CYAN}/help${RESET}"
+    echo -e "   ${C_G2}${div}${RESET}"
+    echo -e "   ${C_G3}dir:${RESET} ${WORKING_DIR}\n"
+}
+
+print_status() {
+    local tc=$(cat "$TOOL_COUNT_FILE" 2>/dev/null || echo "0")
+    local ctx_pct=$(get_context_usage)
+    local div=$(make_divider "=" "$DIVIDER_WIDTH")
+
+    local ctx_color="$C_GREEN"
+    [ "$ctx_pct" -ge 30 ] && ctx_color="$C_YELLOW"
+    [ "$ctx_pct" -ge 50 ] && ctx_color="$C_ORANGE"
+    [ "$ctx_pct" -ge 70 ] && ctx_color="$C_RED"
+
+    echo -e "   ${C_G2}${div}${RESET}"
+    echo -e "   ${C_G3}session:${RESET}${SESSION_ID}  ${C_G2}|${RESET}  ${C_G3}cost:${RESET}\$$(printf "%.2f" "$COST")  ${C_G2}|${RESET}  ${C_G3}context:${RESET}${ctx_color}${ctx_pct}%${RESET}  ${C_G2}|${RESET}  ${C_G3}tools:${RESET}${tc}"
+}
+
+print_response() {
+    local msg="$1" conf="${2:-0}"
+    local conf_c="$C_GREEN"
+    [ "$conf" -lt 90 ] && conf_c="$C_YELLOW"; [ "$conf" -lt 70 ] && conf_c="$C_RED"
+
+    # Blue color matching logo
+    local C_LOGO='\033[38;5;45m'
+    local box_width=$((CONTENT_WIDTH - 2))
+
+    echo ""
+    echo -e "   ${C_G2}--- response ---${RESET}"
+    echo -e "   ${C_TEAL}*${RESET} ${BOLD}Grok${RESET}  ${C_G2}|${RESET}  ${C_G3}time:${RESET}$(date +%H:%M)  ${C_G2}|${RESET}  ${C_G3}confidence:${RESET}${conf_c}${conf}%${RESET}"
+    echo ""
+    echo -e "   ${C_LOGO}$(printf '─%.0s' $(seq 1 $box_width))${RESET}"
+    echo "$msg" | fold -s -w $((box_width)) | while IFS= read -r line; do
+        echo -e "   ${C_LOGO}${line}${RESET}"
+    done
+    echo -e "   ${C_LOGO}$(printf '─%.0s' $(seq 1 $box_width))${RESET}"
+    echo ""
+    echo -e "   ${C_GREEN}done${RESET}"
+}
+
+# Status indicator
+STATUS_FILE="$GROK_DIR/status"
+STATUS_PID=""
+MSG_START_TIME=""
+
+start_status() {
+    MSG_START_TIME=$(date +%s)
+    echo "thinking" > "$STATUS_FILE"
+    (
+        tput civis 2>/dev/null
+        while [ -f "$STATUS_FILE" ]; do
+            local status=$(cat "$STATUS_FILE" 2>/dev/null || echo "working")
+            local elapsed=$(($(date +%s) - MSG_START_TIME))
+            echo -ne "\r${C_TEAL}*${RESET} ${C_G3}${status}...${RESET} ${C_G2}(esc to cancel | ${elapsed}s)${RESET}\033[K" >&2
+            sleep 0.2
+        done
+        tput cnorm 2>/dev/null
+    ) &
+    STATUS_PID=$!
+}
+
+update_status() {
+    echo "$1" > "$STATUS_FILE" 2>/dev/null
+}
+
+stop_status() {
+    rm -f "$STATUS_FILE" 2>/dev/null
+    [ -n "$STATUS_PID" ] && kill $STATUS_PID 2>/dev/null && wait $STATUS_PID 2>/dev/null
+    tput cnorm 2>/dev/null
+    echo -ne "\r\033[K" >&2
+    STATUS_PID=""
+}
+
+# ============================================================================
+# SKILLS
+# ============================================================================
+get_skills_reminder() {
+    [ ! -d "$SKILLS_DIR" ] && return
+
+    local output="\n---\n[SKILLS AVAILABLE]\nCheck if a relevant skill exists and READ IT FIRST using read_file.\n"
+
+    local skills=""
+    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md; do
+        [ -f "$f" ] && skills="${skills}  - $(basename "$f" .md)\n"
+    done
+
+    [ -n "$skills" ] && echo -e "${output}${skills}Path: ${SKILLS_DIR}/[name].md"
+}
+
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
+MESSAGES=$(jq -n --arg s "$SYSTEM_PROMPT" --arg d "$WORKING_DIR" '[{role:"system",content:($s+"\n\nWorking directory: "+$d)}]')
+
+send_message() {
+    local input="$1"
+    local skills_reminder=$(get_skills_reminder)
+    local full_input="${input}${skills_reminder}"
+    MESSAGES=$(echo "$MESSAGES" | jq --arg m "$full_input" '. + [{role:"user",content:$m}]')
+    CANCELLED=false
+
+    check_and_compact
+
+    touch "$GROK_DIR/processing"
+    start_input_listener
+    start_status
+
+    local iter=0
+    while true; do
+        iter=$((iter + 1))
+
+        if check_cost_limit; then
+            stop_status
+            echo -e "\n   ${C_RED}Cost limit reached (\$$(printf "%.2f" "$COST"))${RESET}"
+            stop_input_listener
+            return 1
+        fi
+
+        if check_cancelled; then
+            stop_status
+            echo -e "\n   ${C_YELLOW}Cancelled${RESET}"
+            stop_input_listener
+            return 0
+        fi
+
+        update_status "thinking"
+        local payload=$(jq -n --argjson msgs "$MESSAGES" --arg model "$MODEL" '{messages:$msgs,model:$model,temperature:0.5,max_tokens:8000,response_format:{type:"json_object"}}')
+
+        # Stream to temp file while showing progress
+        local tmp_resp="$GROK_DIR/resp.json"
+        curl -s "$API_URL" -H "Content-Type: application/json" -H "Authorization: Bearer $XAI_API_KEY" -d "$payload" -o "$tmp_resp" &
+        local curl_pid=$!
+
+        # Show bytes received while waiting
+        while kill -0 $curl_pid 2>/dev/null; do
+            if [ -f "$tmp_resp" ]; then
+                local bytes=$(wc -c < "$tmp_resp" 2>/dev/null | tr -d ' ')
+                update_status "receiving ${bytes}b"
+            fi
+            sleep 0.1
+        done
+        wait $curl_pid
+
+        local resp=$(cat "$tmp_resp" 2>/dev/null)
+        rm -f "$tmp_resp"
+
+        if check_cancelled; then
+            stop_status
+            echo -e "\n   ${C_YELLOW}Cancelled${RESET}"
+            stop_input_listener
+            return 0
+        fi
+
+        local err=$(echo "$resp" | jq -r '.error.message//empty')
+        [ -n "$err" ] && { stop_status; stop_input_listener; echo -e "   ${C_RED}Error: $err${RESET}"; return 1; }
+
+        INPUT_TOK=$((INPUT_TOK + $(echo "$resp" | jq -r '.usage.prompt_tokens//0')))
+        OUTPUT_TOK=$((OUTPUT_TOK + $(echo "$resp" | jq -r '.usage.completion_tokens//0')))
+        COST=$(awk -v i="$INPUT_TOK" -v o="$OUTPUT_TOK" -v ci="$COST_INPUT_PER_M" -v co="$COST_OUTPUT_PER_M" 'BEGIN{printf "%.4f",(i/1e6*ci)+(o/1e6*co)}')
+
+        local content=$(echo "$resp" | jq -r '.choices[0].message.content//empty')
+        [ -z "$content" ] && { stop_status; stop_input_listener; echo -e "   ${C_RED}Empty response${RESET}"; return 1; }
+
+        if ! echo "$content" | jq -e . >/dev/null 2>&1; then
+            stop_status
+            echo -e "\n   ${C_RED}Malformed response${RESET}" >&2
+            start_status
+            continue
+        fi
+
+        local thinking=$(echo "$content" | jq -r '.thinking//empty')
+        local task=$(echo "$content" | jq -r '.task//empty')
+        local goal=$(echo "$content" | jq -r '.goal//empty')
+        local progress=$(echo "$content" | jq -c '.progress//{}')
+        local tool_calls=$(echo "$content" | jq -r '.tool_calls//[]')
+        local response=$(echo "$content" | jq -r '.response//empty')
+        local done_flag=$(echo "$content" | jq -r '.done//false')
+        local confidence=$(echo "$content" | jq -r '.confidence//0')
+
+        local completed_count=$(echo "$progress" | jq '.completed | length // 0' 2>/dev/null || echo 0)
+        local total_conditions=$(echo "$content" | jq '.exit_conditions | length // 0' 2>/dev/null || echo 0)
+
+        local thin_div=$(make_divider "-" "$((DIVIDER_WIDTH - 1))")
+
+        echo -e "\n   ${C_G2}${thin_div}${RESET}"
+        echo -e "   ${C_PURPLE}*${RESET} ${C_G4}task:${RESET} ${task}  ${C_G2}(iteration:${iter} | progress:${completed_count}/${total_conditions})${RESET}"
+        [ -n "$goal" ] && [ "$goal" != "null" ] && [ $iter -eq 1 ] && echo -e "   ${C_CYAN}goal:${RESET} ${goal}"
+        [ -n "$thinking" ] && [ "$thinking" != "null" ] && echo -e "   ${C_G3}thinking:${RESET} ${thinking}"
+
+        MESSAGES=$(echo "$MESSAGES" | jq --arg m "$content" '. + [{role:"assistant",content:$m}]')
+
+        local n_tools=$(echo "$tool_calls" | jq 'length')
+        if [ "$n_tools" -gt 0 ] && [ "$done_flag" != "true" ]; then
+            update_status "running ${n_tools} tools"
+            local results="Tool Results:\n"
+
+            for i in $(seq 0 $((n_tools-1))); do
+                local tn=$(echo "$tool_calls" | jq -r ".[$i].tool")
+                local ta=$(echo "$tool_calls" | jq -c ".[$i].args")
+                local tr=$(execute_tool "$tn" "$ta")
+                results="${results}\n[${tn}]:\n${tr}\n"
+            done
+
+            MESSAGES=$(echo "$MESSAGES" | jq --arg r "$results" '. + [{role:"user",content:$r}]')
+            continue
+        fi
+
+        if [ -n "$response" ] && [ "$response" != "null" ]; then
+            stop_status
+            stop_input_listener
+            MESSAGES=$(echo "$MESSAGES" | jq --arg r "$response" '. + [{role:"assistant",content:$r}]')
+            MSG_COUNT=$((MSG_COUNT + 1))
+            print_response "$response" "$confidence"
+            return 0
+        fi
+    done
+}
+
+# ============================================================================
+# INPUT
+# ============================================================================
+get_input() {
+    if [ -s "$INPUT_QUEUE" ]; then
+        local queued=$(head -1 "$INPUT_QUEUE")
+        sed -i '' '1d' "$INPUT_QUEUE" 2>/dev/null || sed -i '1d' "$INPUT_QUEUE" 2>/dev/null
+        echo "$queued"
+        return
+    fi
+
+    echo "" >&2
+    print_status >&2
+    local prompt_div=$(make_divider "-" "$DIVIDER_WIDTH")
+    echo -e "   ${C_G2}${prompt_div}${RESET}" >&2
+    echo -e "   ${C_G3}input:${RESET}" >&2
+    read -e -p $'   \033[38;5;80m>\033[0m ' input
+    echo "$input"
+}
+
+# ============================================================================
+# MAIN
+# ============================================================================
+print_header
+
+while true; do
+    input=$(get_input)
+    [ -z "$input" ] && continue
+
+    case "$input" in
+        /q|/exit|/quit) exit 0 ;;
+        /clear)
+            MESSAGES=$(jq -n --arg s "$SYSTEM_PROMPT" --arg d "$WORKING_DIR" '[{role:"system",content:($s+"\n\nWorking directory: "+$d)}]')
+            MSG_COUNT=0; INPUT_TOK=0; OUTPUT_TOK=0; COST="0.000000"; echo "0" > "$TOOL_COUNT_FILE"
+            SESSION_ID=$(date +%s | md5 | cut -c1-8); print_header ;;
+        /tools)
+            echo -e "\n   ${BOLD}Tools${RESET}"
+            echo -e "   ${C_ORANGE}bash${RESET}         Run command"
+            echo -e "   ${C_TEAL}web_search${RESET}   Search web"
+            echo -e "   ${C_GREEN}read_file${RESET}    Read file"
+            echo -e "   ${C_YELLOW}write_file${RESET}   Write file"
+            echo -e "   ${C_CYAN}list_files${RESET}   List dir"
+            echo -e "   ${C_CYAN}ask_user${RESET}     Ask question\n" ;;
+        /cd\ *) nd="${input#/cd }"; [ -d "$nd" ] && { WORKING_DIR="$(cd "$nd" && pwd)"; echo -e "   ${C_G3}-> $WORKING_DIR${RESET}"; } || echo -e "   ${C_RED}Not found${RESET}" ;;
+        /sessions)
+            echo -e "\n   ${BOLD}Sessions${RESET}"
+            for f in "$SESSION_DIR"/*.json; do [ -f "$f" ] && echo -e "   ${C_CYAN}$(jq -r '.session_id' "$f")${RESET}  $(jq -r '.saved' "$f")"; done
+            echo "" ;;
+        /resume\ *)
+            sid="${input#/resume }"; sf="$SESSION_DIR/${sid}.json"
+            [ -f "$sf" ] && { MESSAGES=$(jq '.messages' "$sf"); SESSION_ID="$sid"; echo -e "   ${C_GREEN}Resumed $sid${RESET}"; } || echo -e "   ${C_RED}Not found${RESET}" ;;
+        /compact) compact_messages ;;
+        /cost\ *)
+            new_limit="${input#/cost }"
+            if [[ "$new_limit" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+                COST_LIMIT="$new_limit"
+                echo -e "   ${C_GREEN}Cost limit: \$${COST_LIMIT}${RESET}"
+            else
+                echo -e "   ${C_RED}Usage: /cost 20${RESET}"
+            fi ;;
+        /help|/?)
+            echo -e "\n   ${BOLD}Commands${RESET}"
+            echo -e "   ${C_CYAN}/tools${RESET}      List tools"
+            echo -e "   ${C_CYAN}/cd DIR${RESET}     Change dir"
+            echo -e "   ${C_CYAN}/sessions${RESET}   List sessions"
+            echo -e "   ${C_CYAN}/resume ID${RESET}  Resume session"
+            echo -e "   ${C_CYAN}/cost N${RESET}     Set cost limit"
+            echo -e "   ${C_CYAN}/compact${RESET}    Force compact"
+            echo -e "   ${C_CYAN}/clear${RESET}      Reset"
+            echo -e "   ${C_CYAN}/exit${RESET}       Quit"
+            echo -e "   ${C_YELLOW}ESC${RESET}         Cancel\n" ;;
+        *) send_message "$input" ;;
+    esac
+done
