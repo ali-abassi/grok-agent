@@ -22,17 +22,19 @@ This harness demonstrates core agentic patterns:
 ## Quick Start
 
 ```bash
-# Set your API key
-echo 'GROK_API_KEY=your-key-here' >> ~/.claude/.env
+# 1. Set up your API key
+cp .env.example ~/.claude/.env
+# Edit ~/.claude/.env and add your key from https://console.x.ai
 
-# Copy to PATH
+# 2. Copy scripts to PATH
 cp grok grok-detailed ~/.local/bin/
 chmod +x ~/.local/bin/grok ~/.local/bin/grok-detailed
 
-# Create skills directory
+# 3. Create skills directory
 mkdir -p ~/.local/bin/skills
+cp skills/skill-creation.md ~/.local/bin/skills/
 
-# Run
+# 4. Run
 grok           # minimal mode
 grok-detailed  # verbose mode
 ```
