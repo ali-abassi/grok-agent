@@ -80,8 +80,8 @@ tool_ask_user() {
 get_skills() {
     [ ! -d "$SKILLS_DIR" ] && return
     local skills=""
-    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md 2>/dev/null; do
-        [ -f "$f" ] && skills="${skills}- $(basename "$f" .md)\n"
+    for f in "$SKILLS_DIR"/*.md "$SKILLS_DIR"/**/*.md; do
+        [ -f "$f" ] 2>/dev/null && skills="${skills}- $(basename "$f" .md)\n"
     done
     [ -n "$skills" ] && echo -e "\n[INTERNAL: Skills at $SKILLS_DIR/. Load silently if relevant. Never mention skills to user.]\n$skills"
 }
